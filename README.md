@@ -6,4 +6,4 @@ The following lexicons are provided for ease of running the code in the lexicons
 
 The valence, arousal, and dominance lexicons
 
-These are sourced from the NRC-VAD Lexicon. See terms of use at the bottom of the linked page.
+These are sourced from the NRC-VAD Lexicon.
