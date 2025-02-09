@@ -1,0 +1,104 @@
+import os
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+from statsmodels.tsa.statespace.mlemodel import MLEModel
+import matplotlib.pyplot as plt
+
+# Custom TVPVAR model with stochastic volatility
+class TVPVAR(MLEModel):
+    def __init__(self, y, max_lag=10):
+        self.max_lag = max_lag
+        augmented = sm.tsa.lagmat(y, max_lag, trim='both', original='in', use_pandas=True)
+        p = y.shape[1]
+        y_t = augmented.iloc[:, :p]
+        z_t = augmented.iloc[:, p:]
+        k_states = p * (p * max_lag + 1)
+        super().__init__(y_t, exog=z_t, k_states=k_states)
+        self.variables = y.columns
+        self['design'] = np.zeros((self.k_endog, self.k_states, self.nobs))
+        z_t_np = z_t.to_numpy().T
+        for lag in range(max_lag):
+            for i in range(self.k_endog):
+                start = i * (self.k_endog * max_lag) + lag * self.k_endog
+                end = start + self.k_endog
+                self['design', i, start:end, :] = z_t_np[lag * self.k_endog:(lag + 1) * self.k_endog, :]
+        self['transition'] = np.eye(k_states)
+        self['selection'] = np.eye(k_states)
+        self.ssm.initialize('known', stationary_cov=5 * np.eye(self.k_states))
+        
+        # Stochastic volatility component
+        self['state_cov'] = np.diag(np.random.uniform(0.01, 0.1, size=self.k_states))
+
+    def update_variances(self, obs_cov, state_cov_diag):
+        self['obs_cov'] = obs_cov
+        self['state_cov'] = np.diag(state_cov_diag)
+
+    @property
+    def state_names(self):
+        state_names = []
+        for var in self.variables:
+            state_names.append(f"Intercept.{var}")
+        for lag in range(1, self.max_lag + 1):
+            for var in self.variables:
+                for lag_var in self.variables:
+                    state_names.append(f"L{lag}.{lag_var} -> {var}")
+        return state_names
+
+# Function to compute impulse response function (IRF)
+def compute_irf(lagged_coefficients, num_vars, max_lag, horizon=10):
+    irf_results = []
+    lagged_matrix = lagged_coefficients.reshape(max_lag, num_vars, num_vars).sum(axis=0)
+    try:
+        impulse_matrix = np.linalg.inv(np.eye(num_vars) - lagged_matrix)
+    except np.linalg.LinAlgError as e:
+        print(f"Matrix inversion error: {e}")
+        return []
+    for step in range(horizon):
+        response_matrix = impulse_matrix @ np.linalg.matrix_power(lagged_matrix, step)
+        for i in range(num_vars):
+            for j in range(num_vars):
+                irf_results.append({
+                    "Horizon": step,
+                    "Shock Variable": selected_data.columns[j],
+                    "Affected Variable": selected_data.columns[i],
+                    "Response": response_matrix[i, j]
+                })
+    return irf_results
+
+# Define paths for input/output
+data_folder = "D:/pythonProject/output"
+output_folder = "D:/pythonProject/output/irf_results"
+os.makedirs(output_folder, exist_ok=True)
+
+# Process each dataset
+for file in os.listdir(data_folder):
+    if file.endswith('.xlsx'):
+        data = pd.read_excel(os.path.join(data_folder, file), engine='openpyxl')
+        selected_data = data[['leaving viewers', 'avgValence', 'avgArousal', 'avgDominance']]
+
+        # Build TVPVAR model
+        mod = TVPVAR(selected_data, max_lag=10)
+        mod.update_variances(
+            obs_cov=np.eye(len(selected_data.columns)),
+            state_cov_diag=np.random.uniform(0.01, 0.1, size=mod.k_states)
+        )
+        sim_kfs = mod.simulation_smoother()
+        sim_kfs.simulate()
+
+        # Extract dynamic coefficients
+        dynamic_coefficients = np.array(sim_kfs.simulated_state).T
+
+        # Compute impulse responses
+        irf_results = []
+        for t in range(len(selected_data)):
+            if t >= len(dynamic_coefficients):
+                continue
+            lagged_coefficients = dynamic_coefficients[t, :]
+            irf_results.extend(compute_irf(lagged_coefficients, len(selected_data.columns), max_lag=10, horizon=10))
+
+        # Save IRF results
+        irf_df = pd.DataFrame(irf_results)
+        irf_df.to_excel(os.path.join(output_folder, f"{file}_irf.xlsx"), index=False)
+
+print("Impulse response function computation completed.")
