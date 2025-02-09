@@ -73,7 +73,28 @@ This is implemented as:
 self['state_cov'] = np.diag(np.random.uniform(0.01, 0.1, size=self.k_states))
 ```
 
-## 5. Code Mapping to Mathematical Components
+## 5. Impulse Response Function (IRF) for TVP-VAR
+To analyze the effect of shocks in a **time-varying environment**, we define the impulse response function (IRF) as:
+
+```math
+IRF_h = (I - \sum_{i=1}^{p} A_{i,t})^{-1} \sum_{j=0}^{h} A_{j,t}
+```
+
+where:
+- \( A_{i,t} \) represents the time-varying lag coefficient matrices.
+- \( h \) is the horizon of the impulse response.
+- The inverse term adjusts for cumulative lagged effects.
+
+This is implemented in the code as:
+
+```python
+lagged_matrix = lagged_coefficients.reshape(max_lag, num_vars, num_vars).sum(axis=0)
+impulse_matrix = np.linalg.inv(np.eye(num_vars) - lagged_matrix)
+for step in range(horizon):
+    response_matrix = impulse_matrix @ np.linalg.matrix_power(lagged_matrix, step)
+```
+
+## 6. Code Mapping to Mathematical Components
 | **Mathematical Concept** | **Code Implementation** |
 |--------------------------|------------------------|
 | VAR model | `TVPVAR(selected_data, max_lag=10)` |
@@ -83,8 +104,9 @@ self['state_cov'] = np.diag(np.random.uniform(0.01, 0.1, size=self.k_states))
 | Observation noise covariance \( H_t \) | `obs_cov=np.eye(len(selected_data.columns))` |
 | Kalman filter smoothing | `sim_kfs = mod.simulation_smoother()` |
 | Extracting coefficients | `dynamic_coefficients = pd.DataFrame(sim_kfs.simulated_state.T, columns=mod.state_names)` |
+| Impulse Response Calculation | `compute_irf(...)` |
 
-## 6. Lagged Variables and Interactions
+## 7. Lagged Variables and Interactions
 The model includes **interaction terms** between `online viewer` and sentiment variables:
 
 ```math
@@ -99,7 +121,7 @@ data['online_Arousal'] = data['online viewer'] * data['avgArousal']
 data['online_Dominance'] = data['online viewer'] * data['avgDominance']
 ```
 
-## 7. Model Estimation and Parameter Extraction
+## 8. Model Estimation and Parameter Extraction
 The **TVP-VAR** model is estimated using **Kalman filtering**:
 
 ```python
@@ -113,7 +135,9 @@ This **TVP-VAR** model allows for:
 - **Dynamic effects**: Sentiment and viewer interactions evolve over time.
 - **Lagged dependencies**: Past audience behavior and sentiment influence current retention.
 - **Stochastic volatility**: Parameters change at different speeds, capturing real-world variability.
+- **Impulse Response Analysis**: The response of each variable to shocks changes dynamically over time.
 
-This explanation can be included in your **Methodology** or **Model Specification** section on GitHub.
+
+
 
 
