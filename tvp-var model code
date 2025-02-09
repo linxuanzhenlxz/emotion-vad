@@ -1,0 +1,111 @@
+import os
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+from statsmodels.tsa.statespace.mlemodel import MLEModel
+
+# Custom TVPVAR model (with stochastic volatility)
+class TVPVAR(MLEModel):
+    def __init__(self, y, max_lag=10):
+        self.max_lag = max_lag
+        augmented = sm.tsa.lagmat(y, max_lag, trim='both', original='in', use_pandas=True)
+        p = y.shape[1]
+        y_t = augmented.iloc[:, :p]
+        z_t = augmented.iloc[:, p:]
+        k_states = p * (p * max_lag + 1)
+        super().__init__(y_t, exog=z_t, k_states=k_states)
+        self.variables = y.columns
+
+        # Design matrix
+        self['design'] = np.zeros((self.k_endog, self.k_states, self.nobs))
+        z_t_np = z_t.to_numpy().T
+        for lag in range(max_lag):
+            for i in range(self.k_endog):
+                start = i * (self.k_endog * max_lag) + lag * self.k_endog
+                end = start + self.k_endog
+                self['design', i, start:end, :] = z_t_np[lag * self.k_endog:(lag + 1) * self.k_endog, :]
+
+        self['transition'] = np.eye(k_states)
+        self['selection'] = np.eye(k_states)
+        self.ssm.initialize('known', stationary_cov=5 * np.eye(self.k_states))
+
+        # **✅ Add stochastic volatility**
+        self['state_cov'] = np.diag(np.random.uniform(0.01, 0.1, size=self.k_states))
+
+    def update_variances(self, obs_cov, state_cov_diag):
+        self['obs_cov'] = obs_cov
+        self['state_cov'] = np.diag(state_cov_diag)
+
+    @property
+    def state_names(self):
+        state_names = []
+        for var in self.variables:
+            state_names.append(f"Intercept.{var}")
+        for lag in range(1, self.max_lag + 1):
+            for var in self.variables:
+                for lag_var in self.variables:
+                    state_names.append(f"L{lag}.{lag_var} -> {var}")
+        return state_names
+
+
+# **Input and Output Paths**
+input_folder = r"D:\\pythonProject\\output"
+output_folder = r"D:\\pythonProject\\output\\result"
+final_output_path = os.path.join(output_folder, "final_combined_results.xlsx")
+os.makedirs(output_folder, exist_ok=True)
+
+# **Get all Excel files**
+excel_files = [f for f in os.listdir(input_folder) if f.endswith('.xlsx') and not f.startswith('~$')]
+
+# **Initialize storage**
+dynamic_combined = []
+
+for file in excel_files:
+    file_path = os.path.join(input_folder, file)
+    try:
+        data = pd.read_excel(file_path, engine='openpyxl')
+    except Exception as e:
+        print(f"Skipping corrupted file: {file} - Error: {e}")
+        continue
+
+    # **Handle missing values**
+    data.fillna({'leaving viewers': 0, 'avgValence': 0.5, 'avgArousal': 0.5, 'avgDominance': 0.5, 'online viewer': 0}, inplace=True)
+
+    # **✅ Interaction between VAD variables and online viewer**
+    data['online_Valence'] = data['online viewer'] * data['avgValence']
+    data['online_Arousal'] = data['online viewer'] * data['avgArousal']
+    data['online_Dominance'] = data['online viewer'] * data['avgDominance']
+
+    # **Select variables (including online viewer and VAD interaction terms)**
+    selected_data = data[['leaving viewers', 'online viewer', 'avgValence', 'avgArousal', 'avgDominance', 'online_Valence', 'online_Arousal', 'online_Dominance']]
+
+    # **TVP-VAR Model**
+    mod = TVPVAR(selected_data, max_lag=10)
+    mod.update_variances(
+        obs_cov=np.eye(len(selected_data.columns)),
+        state_cov_diag=np.random.uniform(0.01, 0.1, size=mod.k_states)  # **✅ Add stochastic volatility**
+    )
+
+    sim_kfs = mod.simulation_smoother()
+    sim_kfs.simulate()
+
+    # **Extract dynamic coefficients**
+    dynamic_coefficients = pd.DataFrame(sim_kfs.simulated_state.T, columns=mod.state_names)
+    dynamic_coefficients.insert(0, 'Time', range(1, len(dynamic_coefficients) + 1))
+    dynamic_coefficients.insert(0, 'File', file)
+
+    # **✅ Add original timestamp (aligned with lag trimming)**
+    dynamic_coefficients.insert(1, 'real_time', data['real_time'].iloc[mod.max_lag:].values)
+
+    # **Save dynamic coefficients**
+    dynamic_output_path = os.path.join(output_folder, f"{file}_dynamic_coefficients.xlsx")
+    dynamic_coefficients.to_excel(dynamic_output_path, index=False)
+
+    # **Store results**
+    dynamic_combined.append(dynamic_coefficients)
+
+    # **✅ Compute and save stochastic volatility analysis results for each file**
+    state_cov_df = pd.DataFrame(np.diag(mod['state_cov']), columns=["Random Volatility"])
+    state_cov_output_path = os.path.join(output_folder, f"{file}_state_cov_results.xlsx")
+    state_cov_df.to_excel(state_cov_output_path, index=False)
+    print(f"State covariance results saved to: {state_cov_output_path}")
