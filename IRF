@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 from statsmodels.tsa.statespace.mlemodel import MLEModel
-import matplotlib.pyplot as plt
 
-# Custom TVPVAR model with stochastic volatility
+
+# ✅ **TVPVAR Model with Stochastic Volatility**
 class TVPVAR(MLEModel):
     def __init__(self, y, max_lag=10):
         self.max_lag = max_lag
@@ -16,6 +16,8 @@ class TVPVAR(MLEModel):
         k_states = p * (p * max_lag + 1)
         super().__init__(y_t, exog=z_t, k_states=k_states)
         self.variables = y.columns
+
+        # Design matrix
         self['design'] = np.zeros((self.k_endog, self.k_states, self.nobs))
         z_t_np = z_t.to_numpy().T
         for lag in range(max_lag):
@@ -23,11 +25,12 @@ class TVPVAR(MLEModel):
                 start = i * (self.k_endog * max_lag) + lag * self.k_endog
                 end = start + self.k_endog
                 self['design', i, start:end, :] = z_t_np[lag * self.k_endog:(lag + 1) * self.k_endog, :]
+
         self['transition'] = np.eye(k_states)
         self['selection'] = np.eye(k_states)
         self.ssm.initialize('known', stationary_cov=5 * np.eye(self.k_states))
-        
-        # Stochastic volatility component
+
+        # ✅ Add stochastic volatility
         self['state_cov'] = np.diag(np.random.uniform(0.01, 0.1, size=self.k_states))
 
     def update_variances(self, obs_cov, state_cov_diag):
@@ -45,15 +48,22 @@ class TVPVAR(MLEModel):
                     state_names.append(f"L{lag}.{lag_var} -> {var}")
         return state_names
 
-# Function to compute impulse response function (IRF)
+
+# ✅ **Impulse Response Function (IRF) Computation**
 def compute_irf(lagged_coefficients, num_vars, max_lag, horizon=10):
+    """
+    Compute the impulse response function (IRF) based on time-varying lagged coefficients.
+    """
     irf_results = []
     lagged_matrix = lagged_coefficients.reshape(max_lag, num_vars, num_vars).sum(axis=0)
+
+    # 🔹 Prevent matrix inversion errors
     try:
-        impulse_matrix = np.linalg.inv(np.eye(num_vars) - lagged_matrix)
-    except np.linalg.LinAlgError as e:
-        print(f"Matrix inversion error: {e}")
-        return []
+        impulse_matrix = np.linalg.inv(np.eye(num_vars) - lagged_matrix + np.eye(num_vars) * 1e-5)
+    except np.linalg.LinAlgError:
+        print("❌ Matrix inversion failed: adding small noise...")
+        impulse_matrix = np.linalg.pinv(np.eye(num_vars) - lagged_matrix + np.eye(num_vars) * 1e-5)  # Pseudo-inverse
+
     for step in range(horizon):
         response_matrix = impulse_matrix @ np.linalg.matrix_power(lagged_matrix, step)
         for i in range(num_vars):
@@ -66,39 +76,95 @@ def compute_irf(lagged_coefficients, num_vars, max_lag, horizon=10):
                 })
     return irf_results
 
-# Define paths for input/output
-data_folder = "D:/pythonProject/output"
-output_folder = "D:/pythonProject/output/irf_results"
+
+# ✅ **Input & Output Paths**
+input_folder = r"D:\pythonProject\output"
+output_folder = r"D:\pythonProject\output\irf4_result"
+final_output_path = os.path.join(output_folder, "final_combined_irf_results.xlsx")
 os.makedirs(output_folder, exist_ok=True)
 
-# Process each dataset
-for file in os.listdir(data_folder):
-    if file.endswith('.xlsx'):
-        data = pd.read_excel(os.path.join(data_folder, file), engine='openpyxl')
-        selected_data = data[['leaving viewers', 'avgValence', 'avgArousal', 'avgDominance']]
+# ✅ **Retrieve all Excel files**
+excel_files = [f for f in os.listdir(input_folder) if f.endswith('.xlsx')]
 
-        # Build TVPVAR model
-        mod = TVPVAR(selected_data, max_lag=10)
+# ✅ **Initialize IRF storage**
+irf_combined = []
+
+# Set lag order & IRF horizon
+max_lag = 10
+horizon = 10
+
+for excel_file in excel_files:
+    file_path = os.path.join(input_folder, excel_file)
+    file_name = os.path.splitext(excel_file)[0]
+
+    try:
+        # ✅ Load data
+        data = pd.read_excel(file_path, engine='openpyxl')
+        data['real_time'] = pd.to_datetime(data['real_time'])
+        data = data.set_index('real_time').sort_index()
+
+        # ✅ Handle missing values
+        data.fillna({'leaving viewers': 0, 'avgValence': 0.5, 'avgArousal': 0.5, 'avgDominance': 0.5, 'online viewer': 0}, inplace=True)
+
+        # ✅ Create interaction terms
+        data['online_Valence'] = data['online viewer'] * data['avgValence']
+        data['online_Arousal'] = data['online viewer'] * data['avgArousal']
+        data['online_Dominance'] = data['online viewer'] * data['avgDominance']
+
+        # ✅ Select relevant variables
+        selected_data = data[['leaving viewers', 'online viewer', 'avgValence', 'avgArousal', 'avgDominance', 
+                              'online_Valence', 'online_Arousal', 'online_Dominance']]
+
+        # ✅ Construct TVP model
+        mod = TVPVAR(selected_data, max_lag=max_lag)
         mod.update_variances(
             obs_cov=np.eye(len(selected_data.columns)),
             state_cov_diag=np.random.uniform(0.01, 0.1, size=mod.k_states)
         )
+
         sim_kfs = mod.simulation_smoother()
         sim_kfs.simulate()
 
-        # Extract dynamic coefficients
+        # ✅ Extract dynamic coefficients
         dynamic_coefficients = np.array(sim_kfs.simulated_state).T
 
-        # Compute impulse responses
+        # ✅ Compute IRF
         irf_results = []
         for t in range(len(selected_data)):
             if t >= len(dynamic_coefficients):
+                print(f"Skipping time {t}: index out of bounds for dynamic coefficients.")
                 continue
+
             lagged_coefficients = dynamic_coefficients[t, :]
-            irf_results.extend(compute_irf(lagged_coefficients, len(selected_data.columns), max_lag=10, horizon=10))
 
-        # Save IRF results
+            # Ensure lagged coefficients have the correct shape
+            expected_size = max_lag * len(selected_data.columns) ** 2
+            actual_size = len(lagged_coefficients)
+            if actual_size != expected_size:
+                print(f"Time {t}: Expected {expected_size} coefficients, got {actual_size}. Adjusting size...")
+                if actual_size > expected_size:
+                    lagged_coefficients = lagged_coefficients[:expected_size]  # Truncate excess values
+                else:
+                    lagged_coefficients = np.append(lagged_coefficients, [0] * (expected_size - actual_size))  # Pad missing values
+
+            # Compute impulse response
+            irf_results.extend(compute_irf(lagged_coefficients, len(selected_data.columns), max_lag, horizon))
+
+        # ✅ Save IRF results
         irf_df = pd.DataFrame(irf_results)
-        irf_df.to_excel(os.path.join(output_folder, f"{file}_irf.xlsx"), index=False)
+        irf_output_path = os.path.join(output_folder, f"{file_name}_irf.xlsx")
+        irf_df.to_excel(irf_output_path, index=False)
+        irf_combined.append(irf_df)
 
-print("Impulse response function computation completed.")
+    except Exception as e:
+        print(f"❌ Failed to process file {file_name}: {e}")
+        continue
+
+# ✅ **Combine and save final IRF results**
+combined_irf_df = pd.concat(irf_combined, ignore_index=True)
+
+with pd.ExcelWriter(final_output_path) as writer:
+    combined_irf_df.to_excel(writer, sheet_name='IRF', index=False)
+
+print(f"✅ IRF results saved to: {final_output_path}")
+
