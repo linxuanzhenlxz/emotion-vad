@@ -1,0 +1,61 @@
+import pandas as pd
+
+# 读取文件1（合并后文本数据）
+file1_path = "D://PHD//数据//data//new//白象1_time_merged_vad.xlsx"  # 替换为你的路径
+df_text = pd.read_excel(file1_path)
+
+# 读取文件2（观众统计数据）
+file2_path = "D://PHD//数据//data//new//白象1_performance.xlsx"  # 替换为你的路径
+df_stats = pd.read_excel(file2_path)
+
+# 确保 Real time 解析为时间格式
+df_text["Real time"] = pd.to_datetime(df_text["Real time"], format="%H:%M:%S")
+df_stats["Real time"] = pd.to_datetime(df_stats["Real time"], format="%H:%M:%S")
+
+# 初始化合并数据列表
+merged_data = []
+
+for i in range(len(df_text) - 1):
+    start_time = df_text.loc[i, "Real time"]  # 当前时间段起始时间 T0
+    end_time = df_text.loc[i + 1, "Real time"]  # 下一个时间段的开始时间 T1（不包含）
+
+    # 筛选符合该时间区间的数据
+    df_segment = df_stats[(df_stats["Real time"] >= start_time) & (df_stats["Real time"] < end_time)]
+
+    if df_segment.empty:
+        continue  # 该时间区间无数据，跳过
+
+    # 获取 T0 时刻的在线人数
+    T0_online_viewer = df_segment.iloc[0]["online viewers"]
+
+    # 计算 in flow, interaction, like 总和
+    inflow_sum = df_segment["inflow"].sum()
+    interaction_sum = df_segment["interaction"].sum()
+    like_sum = df_segment["like"].sum()
+
+    # 计算 T1 在线人数（即下一个时间区间的第一行在线人数）
+    if i + 1 < len(df_text) - 1:
+        T1_online_viewer = df_stats[df_stats["Real time"] >= end_time].iloc[0]["online viewers"]
+    else:
+        T1_online_viewer = T0_online_viewer  # 如果是最后一行，则 outflow = 0
+
+    # 计算 outflow
+    outflow_value = T0_online_viewer + inflow_sum - T1_online_viewer
+
+    # 存入合并数据
+    merged_data.append([
+        start_time.strftime("%H:%M:%S"), df_text.loc[i, "合并文本"], df_text.loc[i, "copies"],
+        T0_online_viewer, inflow_sum, outflow_value, interaction_sum, like_sum
+    ])
+
+# 转换为 DataFrame
+merged_df = pd.DataFrame(merged_data, columns=[
+    "Real time", "合并文本", "copies", "online viewers", "inflow", "outflow", "interaction", "like"
+])
+
+# 保存合并后的文件
+output_path = "D://PHD//数据//data//new//白象1_final_merged.xlsx"
+with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+    merged_df.to_excel(writer, index=False)
+
+print("合并完成，结果已保存至:", output_path)
