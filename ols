@@ -1,0 +1,117 @@
+import pandas as pd
+import numpy as np
+import os
+import glob
+import statsmodels.api as sm
+from sklearn.preprocessing import MinMaxScaler
+
+# ✅ 输入和输出文件夹
+input_folder = r"D:\\pythonProject\\output"
+output_folder = r"D:\\pythonProject\\output\\OLS_result"
+os.makedirs(output_folder, exist_ok=True)
+
+
+def process_file(file_path, max_lag=30, p_threshold=0.1):
+    """
+    Process a single file: read data, compute lagged features, run regression, and extract significant results.
+    """
+    # Load data
+    df = pd.read_excel(file_path, sheet_name='Sheet1')
+
+    # Rename columns for consistency
+    df.rename(columns={
+        'real_time': 'time',
+        'online viewer': 'online',
+        'leaving viewers': 'leaving',
+        'avgValence': 'valence',
+        'avgArousal': 'arousal',
+        'avgDominance': 'dominance',
+        'promotion_flag': 'promotion'
+    }, inplace=True)
+
+    # Keep only numeric columns
+    df = df.select_dtypes(include=[np.number])
+
+    # Fill missing values
+    df.fillna({
+        'leaving': 0,
+        'valence': 0.5,
+        'arousal': 0.5,
+        'dominance': 0.5,
+        'online': df['online'].median() if 'online' in df else 0
+    }, inplace=True)
+
+    # Normalize 'online' and 'leaving'
+    scaler = MinMaxScaler()
+    df[['online_norm', 'leaving_norm']] = scaler.fit_transform(df[['online', 'leaving']])
+
+    # Compute interaction terms
+    df['online_valence_c'] = df['online_norm'] * (df['valence'] - df['valence'].mean())
+    df['online_arousal_c'] = df['online_norm'] * (df['arousal'] - df['arousal'].mean())
+    df['online_dominance_c'] = df['online_norm'] * (df['dominance'] - df['dominance'].mean())
+    df['valence_arousal_c'] = (df['valence'] - df['valence'].mean()) * (df['arousal'] - df['arousal'].mean())
+    df['valence_dominance_c'] = (df['valence'] - df['valence'].mean()) * (df['dominance'] - df['dominance'].mean())
+    df['arousal_dominance_c'] = (df['arousal'] - df['arousal'].mean()) * (df['dominance'] - df['dominance'].mean())
+    df['valence_arousal_dominance_c'] = (df['valence'] - df['valence'].mean()) * (
+                df['arousal'] - df['arousal'].mean()) * (df['dominance'] - df['dominance'].mean())
+
+    # Define key features
+    features = ['online_norm', 'valence', 'arousal', 'dominance',
+                'online_valence_c', 'online_arousal_c', 'online_dominance_c',
+                'valence_arousal_c', 'valence_dominance_c', 'arousal_dominance_c',
+                'valence_arousal_dominance_c']
+
+    # **优化滞后计算，提高性能**
+    lagged_data = {}
+    for lag in range(1, max_lag + 1):
+        for feature in features:
+            lagged_data[f"{feature}_L{lag}"] = df[feature].shift(lag)
+    df = pd.concat([df, pd.DataFrame(lagged_data)], axis=1)
+
+    # Drop rows with NaN values due to lagging
+    df.dropna(inplace=True)
+
+    # Define dependent and independent variables
+    X = df[features + [f"{feature}_L{lag}" for lag in range(1, max_lag + 1) for feature in features]]
+    y = df['leaving_norm']
+
+    # Add constant for regression
+    X = sm.add_constant(X)
+
+    # Fit OLS model
+    model = sm.OLS(y, X).fit()
+
+    # Extract significant results (p < p_threshold)
+    significant_results = model.pvalues[model.pvalues < p_threshold]
+
+    # Create a DataFrame of significant variables
+    significant_df = pd.DataFrame({
+        'File': os.path.basename(file_path),
+        'Variable': significant_results.index,
+        'Coefficient': model.params[significant_results.index],
+        'p-value': significant_results
+    }).reset_index(drop=True)
+
+    return significant_df
+
+
+# **优化文件读取，跳过临时文件**
+file_paths = [f for f in glob.glob(os.path.join(input_folder, "*_merged_vad.xlsx")) if
+              not os.path.basename(f).startswith("~$")]
+
+# Store results for all files
+all_results = []
+for file_path in file_paths:
+    print(f"Processing {file_path}...")
+    result_df = process_file(file_path)
+    if not result_df.empty:
+        all_results.append(result_df)
+
+# Merge all results
+if all_results:
+    final_results = pd.concat(all_results, ignore_index=True)
+    output_path = os.path.join(output_folder, "significant_results_summary.csv")
+    final_results.to_csv(output_path, index=False)
+    print(f"✅ All results saved to {output_path}")
+else:
+    print("⚠️ No valid data found. No results generated.")
