@@ -1,0 +1,47 @@
+import pandas as pd
+import re
+from datetime import datetime, timedelta
+
+
+# 解析 SRT 文件
+def parse_srt(file_path):
+    with open(file_path, 'r', encoding='utf-8') as file:
+        content = file.read().strip()
+
+    entries = re.split(r'\n\n', content)
+    data = []
+
+    for entry in entries:
+        lines = entry.split('\n')
+        if len(lines) < 3:
+            continue
+
+        index = lines[0].strip()
+        time_range = lines[1].strip()
+        text = ' '.join(lines[2:]).strip()
+
+        time_match = re.match(r"(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})", time_range)
+        if time_match:
+            start_time = datetime.strptime(time_match.group(1), "%H:%M:%S,%f")
+            end_time = datetime.strptime(time_match.group(2), "%H:%M:%S,%f")
+            duration = (end_time - start_time).total_seconds()  # 计算持续时间（秒）
+        else:
+            continue
+
+        data.append([index, time_range, duration, text])
+
+    return pd.DataFrame(data, columns=["编号", "时间轴", "持续时间（秒）", "文本"])
+
+
+# 读取 SRT 文件并转换为 Excel
+srt_file_path = "D://PHD//数据//data//new//1.srt"  # 你的 SRT 文件路径
+df = parse_srt(srt_file_path)
+
+# 保存到 Excel
+excel_path = "D://PHD//数据//data//new//output.xlsx"
+df.to_excel(excel_path, index=False)
+
+
+
+# 返回 Excel 文件路径
+excel_path
