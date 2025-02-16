@@ -1,0 +1,17 @@
+import subprocess
+
+def extract_audio(video_path, output_audio_path):
+    """
+    从单个视频文件提取音频，并保存为 MP3（或其他格式）。
+    :param video_path: 输入视频文件路径
+    :param output_audio_path: 输出音频文件路径（如 .mp3, .wav）
+    """
+    command = f'ffmpeg -i "{video_path}" -q:a 0 -map a "{output_audio_path}" -y'
+    subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    print(f"音频提取完成: {output_audio_path}")
+
+
+# 示例用法
+video_file = "D://dist(1)//dist//video//2.mkv"  # 替换为你的视频文件夹路径
+audio_file = "D://dist(1)//dist//video//2.mp3"  # 替换为你的输出文件夹路径
+extract_audio(video_file, audio_file)
