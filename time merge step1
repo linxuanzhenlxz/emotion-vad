@@ -1,0 +1,41 @@
+import pandas as pd
+from datetime import datetime, timedelta
+import math
+
+# 读取 Excel 文件
+file_path = "D://PHD//数据//data//new//白象1.xlsx"  # 修改为你的文件路径
+df = pd.read_excel(file_path)
+
+# 确保 "Real time" 列的第一个时间点是正确的，并转换为 datetime 格式
+df["Real time"] = df["Real time"].astype(str)  # 确保数据是字符串
+start_time = datetime.strptime(df.loc[0, "Real time"], "%H:%M:%S")
+
+# 解析时间轴（假设格式是 00:00:xx,xxx）
+def parse_time_axis(time_str):
+    parts = time_str.split(":")
+    seconds = float(parts[-1].replace(",", "."))  # 转换为浮点数秒
+    return seconds
+
+# 计算时间列（向上取整，避免重复）
+df["时间轴秒"] = df["时间轴"].apply(parse_time_axis)
+df["持续时间（秒）"] = df["持续时间（秒）"].astype(float).apply(math.ceil)  # 向上取整
+
+# 计算新的 "Real time"（避免时间重复）
+current_time = start_time  # 记录当前时间
+real_times = []  # 存储不重复的时间点
+
+for duration in df["持续时间（秒）"]:
+    current_time += timedelta(seconds=duration)  # 累加时间
+    real_times.append(current_time)
+
+# 赋值并格式化时间
+df["Real time"] = [t.strftime("%H:%M:%S") for t in real_times]
+
+# 保存 Excel 文件
+output_path = "D://PHD//数据//data//new//白象1_time.xlsx"
+
+# 使用 ExcelWriter 以确保兼容性
+with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False)
+
+print("时间补全完成，已保存至:", output_path)
